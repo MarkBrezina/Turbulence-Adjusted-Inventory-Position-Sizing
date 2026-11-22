@@ -28,6 +28,12 @@ Post limit orders at last close + volatility adjusted price. With position sizin
 
 ### 3. Learn appropriate market state volatility
 
+Output: [Current state[(low, mid, high), (directional, flat, unknown), (frequency, longevity, half-life)], likelihood] & [Expected movement[(expand, flat, shrink), (continue, break, unknown), (acceleration, expiry, hard-limit)], likelihood]
+inputs: volume, prices, spreads, asset correlations, d1s, d2s, MAs of standards and d1s, d2s, STDs of standards and d1s, d2s. Running profiles.
+dynamics:
+
+
+
 ### 4. Learn appropriate position sizing and volatility adjustments to the strategy based on volatility.
 
 
