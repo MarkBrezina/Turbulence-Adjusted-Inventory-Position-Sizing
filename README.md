@@ -1,6 +1,16 @@
 # Turbulence-Adjusted Inventory & Position Sizing for Buy-the-Dip
 
-Nov 22, 2026 · @Mark
+*Mark · 22 Nov 2026*
+
+## Contents
+
+1. [Thesis](#thesis)
+2. [Universe and data](#universe-and-data)
+3. [Strategy](#strategy)
+4. [State model](#state-model)
+5. [Sizing and adjustment layer](#sizing-and-adjustment-layer)
+6. [Validation](#validation)
+7. [Roadmap and open questions](#roadmap-and-open-questions)
 
 ## Thesis
 
@@ -18,19 +28,36 @@ The airplane analogy maps one to one:
 | Weather radar | Forward heads of the state model |
 | Diverting around a storm | Posting no orders in high-volatility, trend-breaking states |
 
-Research question: does conditioning entry offset, size and holding time on a forecast market state cut inventory risk per unit of return? Inventory risk here means time underwater and maximum adverse excursion. The comparison is against constant size and EWMA vol targeting, across 45 assets, 2021–2026.
+**Research question:** does conditioning entry offset, size and holding time on a forecast market state cut inventory risk per unit of return? Inventory risk here means time underwater and maximum adverse excursion. The comparison is against constant size and EWMA vol targeting, across 45 assets, 2021–2026.
 
-The formal anchor is Avellaneda–Stoikov market making. A one-sided dip buyer is a liquidity provider, and its reservation price falls with inventory q, risk aversion γ, variance σ² and time left T − t:
+The formal anchor is Avellaneda–Stoikov market making. A one-sided dip buyer is a liquidity provider, and its reservation price falls with inventory $q$, risk aversion $\gamma$, variance $\sigma^2$ and time left $T - t$:
 
-$$
+```math
 r_t = s_t - q_t \, \gamma \, \sigma_t^2 \, (T - t)
-$$
+```
 
-The state model's job is to supply a better σ² and a better horizon than a trailing average does.
+The state model's job is to supply a better $\sigma^2$ and a better horizon than a trailing average does.
 
-&#91;embedded content: system overview · data to fills, with the edge fed back\]
+### System overview
 
-Each layer only consumes the one above it, so each can be tested alone. Realised fills feed the per-state edge μ̂(s) back into sizing.
+```mermaid
+flowchart TB
+    D["<b>Data: mktdata store</b><br/>45 assets, 1-minute bars, UTC, session masks"]
+    F["<b>Features</b><br/>Deseasonalised by clock profile:<br/>volatility, direction, microstructure, cross-asset"]
+    subgraph S["State model: three heads"]
+        direction LR
+        V["<b>Volatility level</b><br/>Now: low / mid / high<br/>Next: expand / shrink"]
+        R["<b>Direction</b><br/>Now: trend or flat<br/>Next: continue / break"]
+        P["<b>Persistence</b><br/>Volatility half-life<br/>Slope, jump odds"]
+    end
+    Z["<b>Sizing layer</b><br/>Offset k(s), size q, turbulence envelope q_max(s)<br/>Stall check, inventory decay past the half-life"]
+    O["<b>Orders and backtest</b><br/>Limit below the recent low, fills on trade-through only<br/>Take-profit, time stop, state stop"]
+    D --> F --> S --> Z --> O
+    O -. "realised edge μ̂(s)" .-> Z
+    style Z stroke-width:2px
+```
+
+Each layer only consumes the one above it, so each can be tested alone. Realised fills feed the per-state edge $\hat\mu(s)$ back into sizing.
 
 ## Universe and data
 
@@ -54,40 +81,40 @@ Data hygiene rules, applied before any feature is built:
 
 ## Strategy
 
-The fixed −1% offset becomes a volatility-scaled offset. On EURUSD, a 1% move is close to a full-day range; on SOL it is minute-level noise. Every distance below is in units of forecast volatility σ̂ₕ over the holding horizon h, so one rule set works across all 45 assets.
+The fixed −1% offset becomes a volatility-scaled offset. On EURUSD, a 1% move is close to a full-day range; on SOL it is minute-level noise. Every distance below is in units of forecast volatility $\hat\sigma_h$ over the holding horizon $h$, so one rule set works across all 45 assets.
 
-**Entry.** Rest a buy limit below the recent low Lₜ, the lowest low over a lookback of N bars:
+**Entry.** Rest a buy limit below the recent low $L_t$, the lowest low over a lookback of $N$ bars:
 
-```latex
+```math
 P^{\text{bid}}_t = L_t \cdot \exp\!\big(-k(s_t)\,\hat\sigma_{h,t}\big)
 ```
 
-**Exit.** I read your second rule, "last close + volatility-adjusted price", as the take-profit. Rest a sell limit above the fill price, plus two stops:
+**Exit.** Your second rule, "last close + volatility-adjusted price", is read here as the take-profit. Rest a sell limit above the fill price, plus two stops:
 
-```latex
+```math
 P^{\text{ask}} = P^{\text{fill}} \cdot \exp\!\big(+m(s_t)\,\hat\sigma_{h,t}\big)
 ```
 
-- **Time stop:** exit at market after c × the forecast half-life. A dip that has not mean-reverted by then is a trend, not a dip.
+- **Time stop:** exit at market after $c \times$ the forecast half-life. A dip that has not mean-reverted by then is a trend, not a dip.
 - **State stop:** flatten when the state flips to high volatility with an expanding or breaking forecast. This is the storm diversion.
 
 **Fill model.** This is the part that decides whether the backtest is real.
 
 - A buy limit fills only when price trades through it by at least one tick. A touch does not count. For FX and metals the test uses the ask, not the mid.
 - Fill price = the limit price. Maker fees or rebates are applied per venue.
-- Orders are cancelled and re-posted each bar as Lₜ and σ̂ update, with a one-bar latency.
+- Orders are cancelled and re-posted each bar as $L_t$ and $\hat\sigma$ update, with a one-bar latency.
 - Track post-fill drift at 5, 30 and 60 minutes. Fills followed by further falls are adverse selection, the main cost of this strategy.
 
-**Inventory rules.** At most n open layers per asset, a minimum spacing of one k × σ̂ between layers, and no new layer while the state stop is active.
+**Inventory rules.** At most $n$ open layers per asset, a minimum spacing of one $k \cdot \hat\sigma$ between layers, and no new layer while the state stop is active.
 
 | Parameter | Meaning | Starting range |
 | --- | --- | --- |
-| N | Lookback for the recent low, bars | 60–240 |
-| h | Holding horizon for σ̂, minutes | 30–240 |
-| k(s) | Entry distance, in σ̂ units | 0.5–3 |
-| m(s) | Take-profit distance, in σ̂ units | 0.5–2 |
-| c | Time stop, in forecast half-lives | 1–3 |
-| n | Maximum layers per asset | 1–3 |
+| $N$ | Lookback for the recent low, bars | 60–240 |
+| $h$ | Holding horizon for $\hat\sigma$, minutes | 30–240 |
+| $k(s)$ | Entry distance, in $\hat\sigma$ units | 0.5–3 |
+| $m(s)$ | Take-profit distance, in $\hat\sigma$ units | 0.5–2 |
+| $c$ | Time stop, in forecast half-lives | 1–3 |
+| $n$ | Maximum layers per asset | 1–3 |
 
 ## State model
 
@@ -104,7 +131,7 @@ Your "acceleration, expiry, hard-limit" map onto the persistence head. Accelerat
 **Inputs, grouped by what they measure:**
 
 - **Volatility:** realised volatility at 5, 15, 60 and 240 minutes; Parkinson and Garman–Klass range estimators; bipower variation and a jump flag.
-- **Direction:** efficiency ratio, variance ratio, rolling trend t-statistic, distance from the N-bar low in σ̂ units.
+- **Direction:** efficiency ratio, variance ratio, rolling trend t-statistic, distance from the N-bar low in $\hat\sigma$ units.
 - **Microstructure:** spread and volume as z-scores against their clock profile; trade count where available.
 - **Cross-asset:** absorption ratio (first principal component's share of universe variance) as a systemic stress gauge; rolling betas to BTC, DXY and SPX.
 - **Clock:** time of day, day of week, session flag, minutes to a scheduled event (FOMC, CPI, NFP, earnings).
@@ -118,7 +145,7 @@ Drop the second difference of minute prices: at this frequency it is almost pure
 3. Gradient-boosted trees on the full feature set, one model per head.
 4. A GRU over the feature sequence, multi-task across the three heads.
 
-Labels are built strictly from data after time t, with an embargo of h bars between training and test windows. Class heads are judged on Brier score and reliability curves, because sizing uses the probabilities directly.
+Labels are built strictly from data after time $t$, with an embargo of $h$ bars between training and test windows. Class heads are judged on Brier score and reliability curves, because sizing uses the probabilities directly.
 
 ## Sizing and adjustment layer
 
@@ -126,33 +153,33 @@ Sizing is derived from the state forecasts with a few explicit formulas, not lea
 
 **Order size.** Fractional Kelly on the state-conditional edge, capped by the turbulence envelope and by liquidity:
 
-```latex
+```math
 q_t = \min\!\Big( q_{\max}(s_t),\; f \cdot \frac{\hat\mu(s_t)}{\gamma\,\hat\sigma_{h,t}^2},\; \lambda \cdot \overline{V}_{\text{clock}} \Big)
 ```
 
-Here μ̂(s) is the mean net return per fill observed in that state in training. f is the Kelly fraction (start at 0.25). V̄ is clock-profile volume, and λ caps participation.
+Here $\hat\mu(s)$ is the mean net return per fill observed in that state in training, $f$ is the Kelly fraction (start at 0.25), $\overline{V}_{\text{clock}}$ is clock-profile volume, and $\lambda$ caps participation.
 
-**Turbulence envelope.** This is the penetration speed. Pick q\_max(s) so that a 1-in-α loss over the holding horizon, jump included, stays inside the per-trade loss budget B:
+**Turbulence envelope.** This is the penetration speed. Pick $q_{\max}(s)$ so that a 1-in-$\alpha$ loss over the holding horizon, jump included, stays inside the per-trade loss budget $B$:
 
-```latex
+```math
 q_{\max}(s) = \frac{B}{P_t \left( z_\alpha\,\hat\sigma_{h}(s) + \hat p_{\text{jump}}(s)\,\hat J(s) \right)}
 ```
 
 **Stall check.** Skip the order when the expected edge is below the cost of trading:
 
-```latex
+```math
 \hat\mu(s_t) < \text{fee} + \tfrac{1}{2}\,\text{spread}_t + \text{adverse selection}(s_t)
 ```
 
-**Offset adjustment.** Move entries further out when the forecast is for expansion: k(s) = k₀ + k₁ · P(expand) + k₂ · P(break). In a turbulent state the strategy buys deeper dips and buys less of them.
+**Offset adjustment.** Move entries further out when the forecast is for expansion: $k(s) = k_0 + k_1 \cdot P(\text{expand}) + k_2 \cdot P(\text{break})$. In a turbulent state the strategy buys deeper dips and buys less of them.
 
 **Inventory decay.** Past the forecast half-life, held inventory is cut back on a schedule instead of waiting for the take-profit:
 
-```latex
+```math
 q_{\text{held}}(t) = q_0 \cdot \exp\!\big(-(t - t_0 - \tau_{1/2}) / \tau_{1/2}\big), \quad t > t_0 + \tau_{1/2}
 ```
 
-**What is learned, and how.** k₀, k₁, k₂, m(s), f, γ and B are fitted per asset class with walk-forward Bayesian optimisation, and μ̂(s) is estimated per state bucket on training data only. Reinforcement learning over the full action space is a later step, and only if this layer leaves a measurable gap.
+**What is learned, and how.** $k_0, k_1, k_2, m(s), f, \gamma$ and $B$ are fitted per asset class with walk-forward Bayesian optimisation, and $\hat\mu(s)$ is estimated per state bucket on training data only. Reinforcement learning over the full action space is a later step, and only if this layer leaves a measurable gap.
 
 ## Validation
 
@@ -165,18 +192,18 @@ The state model survives only if it beats EWMA vol targeting on inventory risk p
 | B2 | k × EWMA volatility | EWMA vol targeting | The null hypothesis to beat |
 | B3 | k(s) × forecast σ̂ | Full sizing layer | The proposal |
 
-**Split.** Train on 2021–2023, tune on 2024, and keep 2025 onward untouched until the design is frozen. Inside training, use walk-forward folds purged of overlapping labels with an embargo of h bars.
+**Split.** Train on 2021–2023, tune on 2024, and keep 2025 onward untouched until the design is frozen. Inside training, use walk-forward folds purged of overlapping labels with an embargo of $h$ bars.
 
 **Metrics, per asset class:**
 
 - Net return and Sharpe after fees and spread.
 - Inventory-weighted time underwater: the sum of position size × minutes held below the entry price.
-- Maximum adverse excursion per fill, in σ̂ units.
+- Maximum adverse excursion per fill, in $\hat\sigma$ units.
 - Time to flat after a state stop.
 - Fill rate, and post-fill drift at 5, 30 and 60 minutes (adverse selection).
 - Turnover and costs as a share of gross profit.
 
-**Guarding against overfitting.** Report the number of configurations tried and a deflated Sharpe ratio. Check that the fitted parameters are stable across walk-forward folds; a k₁ that flips sign between folds is noise.
+**Guarding against overfitting.** Report the number of configurations tried and a deflated Sharpe ratio. Check that the fitted parameters are stable across walk-forward folds; a $k_1$ that flips sign between folds is noise.
 
 **Kill criteria.** Drop the state model if B3 does not beat B2 on inventory-weighted time underwater at equal or better net Sharpe. Drop the strategy itself if B1 cannot clear costs in any class. Either result is a valid finding.
 
@@ -189,10 +216,10 @@ Each phase ends with a gate. If a gate fails, stop or rethink before building th
 3. **Backtester.** Trade-through fill model, fees, latency, B0 and B1. Gate: B1 clears costs in at least one asset class.
 4. **Volatility forecast.** HAR-RV, then B2. Gate: HAR-RV beats EWMA on QLIKE loss out of sample.
 5. **State heads.** HMM, then gradient boosting, for the three heads. Gate: calibrated probabilities, Brier score better than climatology.
-6. **Sizing layer.** B3, fitted walk-forward. Gate: the kill criteria in Validation.
+6. **Sizing layer.** B3, fitted walk-forward. Gate: the kill criteria in [Validation](#validation).
 7. **Held-out test.** One run on 2025 onward, design frozen beforehand.
 
-Open questions:
+### Open questions
 
 - [ ] Lookback for the recent low: a fixed N bars, or the session low?
 - [ ] Is the second rule (last close + volatility-adjusted amount) the take-profit, as assumed here, or a second entry?
