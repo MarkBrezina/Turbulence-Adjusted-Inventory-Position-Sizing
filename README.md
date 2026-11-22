@@ -22,9 +22,9 @@ Research question: does conditioning entry offset, size and holding time on a fo
 
 The formal anchor is Avellaneda–Stoikov market making. A one-sided dip buyer is a liquidity provider, and its reservation price falls with inventory q, risk aversion γ, variance σ² and time left T − t:
 
-$$$
+$$
 r_t = s_t - q_t \, \gamma \, \sigma_t^2 \, (T - t)
-$$$
+$$
 
 The state model's job is to supply a better σ² and a better horizon than a trailing average does.
 
